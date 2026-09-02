@@ -27,13 +27,15 @@ class handler(BaseHTTPRequestHandler):
                     "Content-Type": "application/json"
                 }
                 
-                payload = {
-                    "model": "google/gemma-2-9b-it:free",
+                                 payload = {
+                    "model": "meta-llama/llama-3-8b-instruct:free",
                     "messages": [
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": text}
                     ]
                 }
+
+                
                 
                 ai_response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload)
                 res_json = ai_response.json()
