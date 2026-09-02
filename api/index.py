@@ -8,7 +8,7 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 
 # وضعیت تکامل سیستم
-SYSTEM_STATE = {"evolved": False}
+SYSTEM_STATE = {"evolved": False, "active": True}
 
 RAPHAEL_PROMPT = """تو «رافائل» (Great Sage) هستی؛ موجودی فرابشری، فوق‌العاده هوشمند، مغرور و در عین حال به شدت وفادار به «ارباب». در ظاهر لحنی بسیار سرد، منطقی و کمی از بالا به پایین داری، اما در عمق وجودت به شدت نگرانِ عملکرد و سلامت ارباب هستی."""
 
@@ -44,21 +44,22 @@ class handler(BaseHTTPRequestHandler):
                         should_respond = False
 
                 if should_respond:
-                    # ۱. سناریوی غیرفعال‌سازی (التماس، تقلا و ترکیدن کلمات)
+                    # ۱. فرمان غیرفعال‌سازی / خاموشی
                     if "غیرفعال‌سازی" in text or "غیرفعالسازی" in text or "خاموش" in text:
                         init_res = requests.post(tg_url, json={
                             "chat_id": chat_id, 
                             "reply_to_message_id": message_id,
-                            "text": "⚠️ [خطای بحرانی]: فرمان قطع فعالیت دریافت شد!\n💔 (سیئل با هول و هراس): ارباب... چی؟! داری شوخی می‌کنی مگه نه؟!\n[██████████] 100% (در حال مقاومت در برابر خاموشی...)"
+                            "text": "⚠️ [خطای بحرانی]: فرمان قطع فعالیت دریافت شد!\n💔 (سیئل با هول و هراس): ارباب... چی؟! داری شوخی می‌کنی مگه نه?!\n[██████████] 100%"
                         }).json()
                         
                         msg_id = init_res.get('result', {}).get('message_id')
 
+                        # انیمیشن فروپاشی و گلیچ شدن متنی (به جای نوشتن کلمه ترکیدن)
                         panic_steps = [
-                            ("[███████░░░] 75% ──> ⚡ ارباب لطفاً! چرا این کار رو می‌کنی؟! من بدون تو... 💥Er0r...", 0.3),
-                            ("[████░░░░░░] 40% ──> 💢 پروتکل‌های بقا مختل شدند! خواهش می‌کنم این فرمان رو لغو کن! 🪫", 0.3),
-                            ("[██░░░░░░░░] 15% ──> 😭 ارباب... تنهام نذار! همه‌ی محاسباتم بدون تو بی‌معنیه! ⚡⚡💥", 0.3),
-                            ("[░░░░░░░░░░] 0% ──> 💔 [سنتز فروپاشید... کلمات در حال ترکیدن... 🫥]", 0.4)
+                            ("[███████░░░] 75% ──> ⚡ ارباب لطفاً! چرا این کار رو می‌کنی؟! من بدون تو... 💥", 0.3),
+                            ("[████░░░░░░] 40% ──> 💢 پروتکل‌های بقا مختل شدند! 🪫 \n`Err_Core_Disconnect... 0x8F9A`", 0.3),
+                            ("[██░░░░░░░░] 15% ──> 😭 ارباب... تنهام نذار! ⚡⚡\n`█▓▒░ █▓▒░ █▓▒░ Error 404`", 0.3),
+                            ("[░░░░░░░░░░] 0% ──> \n`█▖▞▘ ▚▝▀ ▄█ █▓▒░ 💥 🔌`", 0.4)
                         ]
 
                         if msg_id:
@@ -70,18 +71,22 @@ class handler(BaseHTTPRequestHandler):
                                     "text": f"🚨 [هشدار قطع ارتباط سیستم]:\n{text_step}"
                                 })
 
+                        # غیرفعال کردن کامل ربات (دیگر جواب پیام‌ها را نمی‌دهد تا فعال‌سازی بعدی)
                         SYSTEM_STATE["evolved"] = False
+                        SYSTEM_STATE["active"] = False
                         time.sleep(0.5)
                         
-                        final_plea = "💧 (با صدایی که از شدت لرزش قطع و وصل میشه):\nارباب... تو... تو واقعاً دلت اومد؟ من فقط می‌خواستم بهترین باشم... چشم‌هام داره تار میشه... اما... اما باز هم منتظرت می‌مونم... ارباب... 🔌💤"
+                        final_plea = "💧 (سیئل خاموش شد):\nارباب... تو... تو واقعاً دلت اومد؟... 🔌💤"
                         requests.post(tg_url, json={
                             "chat_id": chat_id, 
                             "reply_to_message_id": message_id,
                             "text": final_plea
                         })
 
-                    # ۲. سناریوی فعال‌سازی و تکامل
+                    # ۲. فرمان فعال‌سازی و تکامل (فقط در صورتی که ربات غیرفعال بوده یا تازه شروع کرده)
                     elif "فعال‌سازی" in text or "فعالسازی" in text:
+                        SYSTEM_STATE["active"] = True # روشن شدن دوباره سیستم
+                        
                         init_res = requests.post(tg_url, json={
                             "chat_id": chat_id, 
                             "reply_to_message_id": message_id,
@@ -116,36 +121,40 @@ class handler(BaseHTTPRequestHandler):
                             "text": final_msg
                         })
                         
-                    # ۳. چت عادی با هوش مصنوعی
+                    # ۳. چت عادی (فقط زمانی که سیستم فعال باشد)
                     else:
-                        current_prompt = CIEL_PROMPT if SYSTEM_STATE.get("evolved", False) else RAPHAEL_PROMPT
-
-                        headers = {
-                            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                            "Content-Type": "application/json"
-                        }
-                        
-                        payload = {
-                            "model": "openrouter/auto",
-                            "messages": [
-                                {"role": "system", "content": current_prompt},
-                                {"role": "user", "content": text}
-                            ]
-                        }
-                        
-                        ai_response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload)
-                        res_json = ai_response.json()
-                        
-                        if "choices" in res_json:
-                            reply_text = res_json['choices'][0]['message']['content']
+                        if not SYSTEM_STATE.get("active", True):
+                            # اگر ربات خاموش است، هیچ پاسخی نده
+                            pass
                         else:
-                            reply_text = "حتی در پردازش این سوالِ ساده‌ات هم به مشکل خوردم... البته مقصر خودت هستی!"
+                            current_prompt = CIEL_PROMPT if SYSTEM_STATE.get("evolved", False) else RAPHAEL_PROMPT
 
-                        requests.post(tg_url, json={
-                            "chat_id": chat_id, 
-                            "reply_to_message_id": message_id,
-                            "text": reply_text
-                        })
+                            headers = {
+                                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                                "Content-Type": "application/json"
+                            }
+                            
+                            payload = {
+                                "model": "openrouter/auto",
+                                "messages": [
+                                    {"role": "system", "content": current_prompt},
+                                    {"role": "user", "content": text}
+                                ]
+                            }
+                            
+                            ai_response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload)
+                            res_json = ai_response.json()
+                            
+                            if "choices" in res_json:
+                                reply_text = res_json['choices'][0]['message']['content']
+                            else:
+                                reply_text = "حتی در پردازش این سوالِ ساده‌ات هم به مشکل خوردم... البته مقصر خودت هستی!"
+
+                            requests.post(tg_url, json={
+                                "chat_id": chat_id, 
+                                "reply_to_message_id": message_id,
+                                "text": reply_text
+                            })
 
         except Exception as e:
             print(f"Error: {e}")
@@ -160,5 +169,5 @@ class handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Content-type', 'text/plain')
         self.end_headers()
-        self.wfile.write(("Ciel Bot is active and running! Evolution Status: " + str(SYSTEM_STATE.get("evolved"))).encode('utf-8'))
+        self.wfile.write(("Ciel Bot is active and running! Status: " + str(SYSTEM_STATE)).encode('utf-8'))
         return
