@@ -27,9 +27,9 @@ class handler(BaseHTTPRequestHandler):
                     "Content-Type": "application/json"
                 }
                 
-                # استفاده از مدل فعال و رایگان جدید
+                # استفاده از روتور هوشمند و خودکار OpenRouter
                 payload = {
-                    "model": "meta-llama/llama-3-8b-instruct:free",
+                    "model": "openrouter/auto",
                     "messages": [
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": text}
