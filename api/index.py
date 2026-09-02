@@ -27,20 +27,18 @@ class handler(BaseHTTPRequestHandler):
                     "Content-Type": "application/json"
                 }
                 
-                                 payload = {
+                # استفاده از مدل فعال و رایگان جدید
+                payload = {
                     "model": "meta-llama/llama-3-8b-instruct:free",
                     "messages": [
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": text}
                     ]
                 }
-
-                
                 
                 ai_response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload)
                 res_json = ai_response.json()
                 
-                # بررسی اینکه آیا OpenRouter ارور داده یا جواب درست داده است
                 if "choices" in res_json:
                     reply_text = res_json['choices'][0]['message']['content']
                 else:
