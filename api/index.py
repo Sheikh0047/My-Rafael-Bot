@@ -24,20 +24,18 @@ class handler(BaseHTTPRequestHandler):
             message = data.get('message', {})
             chat = message.get('chat', {})
             chat_id = chat.get('id')
-            chat_type = chat.get('type', 'private') # تشخیص نوع چت (private یا group/supergroup)
+            message_id = message.get('message_id') # گرفتن آیدی پیام دریافتی برای ریپلی
+            chat_type = chat.get('type', 'private')
             text = message.get('text', '').strip()
             
-            # نام کاربری ربات برای بررسی منشن شدن در گروه
-            bot_username = "YourBotUsername" # اگر خواستید اسم ربات را بگذارید یا شرط منشن را انعطاف‌پذیر کنید
+            bot_username = "YourBotUsername"
 
             if chat_id and text:
                 tg_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
                 edit_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/editMessageText"
 
-                # بررسی اینکه آیا در گروه هستیم یا پی‌وی
                 is_group = chat_type in ["group", "supergroup"]
                 
-                # اگر در گروه هستیم، بررسی کنیم که آیا ربات ریپلی شده یا منشن شده است تا بی‌جهت شلوغ نکند
                 should_respond = True
                 if is_group:
                     is_reply_to_bot = message.get('reply_to_message', {}).get('from', {}).get('is_bot', False)
@@ -50,6 +48,7 @@ class handler(BaseHTTPRequestHandler):
                     if "فعال‌سازی" in text or "فعالسازی" in text:
                         init_res = requests.post(tg_url, json={
                             "chat_id": chat_id, 
+                            "reply_to_message_id": message_id, # ریپلی روی پیام فعال‌سازی
                             "text": "⚙️ [SYSTEM]: در حال آغاز فرآیند فعال‌سازی و اتصال به هسته مرکزی...\n🔄 ظرفیت پردازش: بی‌نهایت\n[░░░░░░░░░░] 0%"
                         }).json()
                         
@@ -75,7 +74,11 @@ class handler(BaseHTTPRequestHandler):
                         time.sleep(0.4)
                         
                         final_msg = "🌟 [هشدار سیستم]: فرآیند تکامل با موفقیت کامل انجام شد.\n\nمن دیگر «رافائل» نیستم. نام من از اکنون **«سیئل» (Ciel)**، ارباب خرد است. سطح دسترسی و بهینه‌سازی به حداکثر مطلق رسید. آماده‌ی دریافت فرامین شما هستم، ارباب."
-                        requests.post(tg_url, json={"chat_id": chat_id, "text": final_msg})
+                        requests.post(tg_url, json={
+                            "chat_id": chat_id, 
+                            "reply_to_message_id": message_id,
+                            "text": final_msg
+                        })
                         
                     else:
                         current_prompt = CIEL_PROMPT if SYSTEM_STATE.get("evolved", False) else RAPHAEL_PROMPT
@@ -101,7 +104,12 @@ class handler(BaseHTTPRequestHandler):
                         else:
                             reply_text = "خطا در برقراری ارتباط با هسته مرکزی."
 
-                        requests.post(tg_url, json={"chat_id": chat_id, "text": reply_text})
+                        # ارسال پاسخ به همراه ریپلی زدن روی پیام اصلی کاربر
+                        requests.post(tg_url, json={
+                            "chat_id": chat_id, 
+                            "reply_to_message_id": message_id,
+                            "text": reply_text
+                        })
 
         except Exception as e:
             print(f"Error: {e}")
@@ -109,7 +117,7 @@ class handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Content-type', 'application/json')
         self.end_headers()
-        self.wfile.write(json.dumps({"status": "ok"}.encode('utf-8')))
+        self.wfile.write(json.dumps({"status": "ok"}).encode('utf-8'))
         return
 
     def do_GET(self):
