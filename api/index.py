@@ -13,6 +13,8 @@ class handler(BaseHTTPRequestHandler):
         content_length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(content_length)
         
+        reply_text = "[خطا در پردازش اطلاعات سیستم]"
+        
         try:
             data = json.loads(body.decode('utf-8'))
             message = data.get('message', {})
@@ -36,13 +38,20 @@ class handler(BaseHTTPRequestHandler):
                 ai_response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload)
                 res_json = ai_response.json()
                 
-                reply_text = res_json.get('choices', [{}])[0].get('message', {}).get('content', '[خطا در پردازش اطلاعات سیستم]')
+                # بررسی اینکه آیا OpenRouter ارور داده یا جواب درست داده است
+                if "choices" in res_json:
+                    reply_text = res_json['choices'][0]['message']['content']
+                else:
+                    reply_text = f"[OpenRouter Error]: {json.dumps(res_json)}"
 
                 tg_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
                 requests.post(tg_url, json={"chat_id": chat_id, "text": reply_text})
 
         except Exception as e:
-            print(f"Error: {e}")
+            reply_text = f"[Code Exception]: {str(e)}"
+            if 'chat_id' in locals() and chat_id:
+                tg_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+                requests.post(tg_url, json={"chat_id": chat_id, "text": reply_text})
 
         self.send_response(200)
         self.send_header('Content-type', 'application/json')
