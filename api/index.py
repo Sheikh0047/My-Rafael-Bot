@@ -131,83 +131,77 @@ def db_get_state(chat_id):
     default = {"active": True, "evolved": False}
     if not db_enabled():
         return default
-
-    rows = supabase_request(
-        "GET",
-        "chat_state",
-        params={
-            "chat_id": f"eq.{chat_id}",
-            "select": "active,evolved",
-            "limit": "1",
-        },
-    )
-    return ({**default, **rows[0]} if rows else default)
+    try:
+        rows = supabase_request(
+            "GET", "chat_state",
+            params={"chat_id": f"eq.{chat_id}", "select": "active,evolved", "limit": "1"},
+        )
+        return ({**default, **rows[0]} if rows else default)
+    except Exception as exc:
+        print(f"Supabase db_get_state failed: {type(exc).__name__}: {exc}")
+        return default
 
 
 def db_set_state(chat_id, active=None, evolved=None):
     if not db_enabled():
         return
-
-    current = db_get_state(chat_id)
-    if active is not None:
-        current["active"] = bool(active)
-    if evolved is not None:
-        current["evolved"] = bool(evolved)
-
-    # on_conflict is required for a proper upsert on chat_id.
-    supabase_request(
-        "POST",
-        "chat_state",
-        params={"on_conflict": "chat_id"},
-        payload={"chat_id": str(chat_id), **current},
-    )
+    try:
+        current = db_get_state(chat_id)
+        if active is not None:
+            current["active"] = bool(active)
+        if evolved is not None:
+            current["evolved"] = bool(evolved)
+        supabase_request(
+            "POST", "chat_state",
+            params={"on_conflict": "chat_id"},
+            payload={"chat_id": str(chat_id), **current},
+        )
+    except Exception as exc:
+        print(f"Supabase db_set_state failed: {type(exc).__name__}: {exc}")
 
 
 def db_get_history(chat_id):
     if not db_enabled() or MAX_HISTORY == 0:
         return []
-
-    rows = supabase_request(
-        "GET",
-        "chat_messages",
-        params={
-            "chat_id": f"eq.{chat_id}",
-            "select": "role,content",
-            "order": "id.desc",
-            "limit": str(MAX_HISTORY),
-        },
-    )
-    rows = list(reversed(rows or []))
-    return [
-        {"role": item["role"], "content": item["content"]}
-        for item in rows
-    ]
+    try:
+        rows = supabase_request(
+            "GET", "chat_messages",
+            params={
+                "chat_id": f"eq.{chat_id}",
+                "select": "role,content",
+                "order": "id.desc",
+                "limit": str(MAX_HISTORY),
+            },
+        )
+        rows = list(reversed(rows or []))
+        return [{"role": item["role"], "content": item["content"]} for item in rows]
+    except Exception as exc:
+        print(f"Supabase db_get_history failed: {type(exc).__name__}: {exc}")
+        return []
 
 
 def db_save_message(chat_id, role, content):
     if not db_enabled() or not content:
         return
-
-    supabase_request(
-        "POST",
-        "chat_messages",
-        payload={
-            "chat_id": str(chat_id),
-            "role": role,
-            "content": str(content)[:12000],
-        },
-    )
+    try:
+        supabase_request(
+            "POST", "chat_messages",
+            payload={"chat_id": str(chat_id), "role": role, "content": str(content)[:12000]},
+        )
+    except Exception as exc:
+        print(f"Supabase db_save_message failed: {type(exc).__name__}: {exc}")
 
 
 def db_clear_history(chat_id):
     if not db_enabled():
         return
-
-    supabase_request(
-        "DELETE",
-        "chat_messages",
-        params={"chat_id": f"eq.{chat_id}"},
-    )
+    try:
+        supabase_request(
+            "DELETE", "chat_messages",
+            params={"chat_id": f"eq.{chat_id}"},
+        )
+    except Exception as exc:
+        print(f"Supabase db_clear_history failed: {type(exc).__name__}: {exc}")
 
 
 # =========================================================
@@ -730,13 +724,14 @@ def handle_message(message):
         )
 
         # Save only text/placeholder, never the raw image bytes.
+        # Send the reply first; database writes must not suppress Telegram responses.
+        send_text(chat_id, answer, message_id)
         db_save_message(
             chat_id,
             "user",
             history_text or "[محتوای چندرسانه‌ای]",
         )
         db_save_message(chat_id, "assistant", answer)
-        send_text(chat_id, answer, message_id)
 
     except Exception as exc:
         error_text = str(exc)[:1000]
