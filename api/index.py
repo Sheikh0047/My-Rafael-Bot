@@ -19,6 +19,14 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openrouter/free").strip()
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
+# مدل‌های جایگزین؛ در صورت محدودیت یا قطعی مدل اصلی به‌ترتیب امتحان می‌شوند.
+OPENROUTER_FALLBACK_MODELS = [
+    "inclusionai/ling-3.2-flash:free",
+    "nvidia/nemotron-3.5-super-vl:free",
+    "particle-ai/particle-1:free",
+    "openrouter/free",
+]
+
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 # Supports both the old Vercel variable name and a clearer new name.
 SUPABASE_KEY = (
@@ -33,6 +41,7 @@ BOT_USERNAME = os.getenv("BOT_USERNAME", "").lstrip("@").lower()
 MAX_HISTORY = max(0, min(int(os.getenv("MAX_HISTORY", "16")), 40))
 MAX_TOOL_ROUNDS = 4
 HTTP_TIMEOUT = 25
+OPENROUTER_TIMEOUT = 18
 
 
 # =========================================================
@@ -113,7 +122,6 @@ def supabase_request(method, table, params=None, payload=None):
     )
 
     if response.status_code >= 400:
-        # Include Supabase's actual response body; it usually explains 401/403.
         detail = (response.text or response.reason or "")[:1200]
         raise RuntimeError(
             f"Supabase HTTP {response.status_code} در جدول {table}: {detail}"
@@ -443,34 +451,82 @@ def call_openrouter(messages):
         "X-Title": "Raphael Ciel Telegram Assistant",
     }
 
-    payload = {
-        "model": OPENROUTER_MODEL,
-        "messages": messages,
-        "tools": TOOLS,
-        "tool_choice": "auto",
-        "parallel_tool_calls": False,
-        "max_tokens": 1200,
-    }
+    # مدل اصلی در اولویت است؛ در خطاهای موقت، مدل‌های بعدی امتحان می‌شوند.
+    models = list(dict.fromkeys(
+        [OPENROUTER_MODEL] + OPENROUTER_FALLBACK_MODELS
+    ))
 
-    response = requests.post(
-        OPENROUTER_URL,
-        headers=headers,
-        json=payload,
-        timeout=55,
+    retryable_statuses = {408, 409, 425, 429, 500, 502, 503, 504, 529}
+    errors = []
+
+    for model in models:
+        payload = {
+            "model": model,
+            "messages": messages,
+            "tools": TOOLS,
+            "tool_choice": "auto",
+            "parallel_tool_calls": False,
+            "max_tokens": 1200,
+        }
+
+        try:
+            response = requests.post(
+                OPENROUTER_URL,
+                headers=headers,
+                json=payload,
+                timeout=OPENROUTER_TIMEOUT,
+            )
+
+            if response.status_code >= 400:
+                detail = (response.text or response.reason or "")[:500]
+                errors.append(
+                    f"{model}: HTTP {response.status_code} - {detail}"
+                )
+
+                if response.status_code in retryable_statuses:
+                    print(
+                        f"Model {model} unavailable "
+                        f"(HTTP {response.status_code}); trying next model."
+                    )
+                    continue
+
+                # خطاهای دائمی مثل کلید نامعتبر را بی‌دلیل پنهان نکن.
+                raise RuntimeError(
+                    f"OpenRouter HTTP {response.status_code}: {detail}"
+                )
+
+            data = response.json()
+            choices = data.get("choices") or []
+
+            if not choices:
+                errors.append(f"{model}: no choices returned")
+                continue
+
+            print(f"OpenRouter selected model: {model}")
+            return choices[0]["message"]
+
+        except requests.exceptions.Timeout:
+            errors.append(f"{model}: request timeout")
+            print(f"Model {model} timed out; trying next model.")
+            continue
+
+        except requests.exceptions.ConnectionError as exc:
+            errors.append(f"{model}: connection error")
+            print(
+                f"Connection error with {model}: {exc}; "
+                "trying next model."
+            )
+            continue
+
+        except ValueError as exc:
+            errors.append(f"{model}: invalid JSON response: {exc}")
+            print(f"Invalid response from {model}; trying next model.")
+            continue
+
+    raise RuntimeError(
+        "تمام مدل‌های هوش مصنوعی در دسترس نیستند:\n"
+        + "\n".join(errors)[:2500]
     )
-
-    if response.status_code >= 400:
-        raise RuntimeError(
-            f"OpenRouter HTTP {response.status_code}: {response.text[:700]}"
-        )
-
-    data = response.json()
-    choices = data.get("choices") or []
-
-    if not choices:
-        raise RuntimeError("OpenRouter returned no choices")
-
-    return choices[0]["message"]
 
 
 def ask_ai(chat_id, user_content, evolved):
@@ -659,7 +715,8 @@ def handle_message(message):
             f"وضعیت: {'فعال' if state['active'] else 'خاموش'}\n"
             f"شخصیت: {'سیئل' if state['evolved'] else 'رافائل'}\n"
             f"حافظه پایدار: {memory}\n"
-            f"مدل: {OPENROUTER_MODEL}",
+            f"مدل اصلی: {OPENROUTER_MODEL}\n"
+            f"مدل‌های جایگزین: {len(OPENROUTER_FALLBACK_MODELS)}",
             message_id,
         )
         return
@@ -767,6 +824,7 @@ class handler(BaseHTTPRequestHandler):
                 "status": "running",
                 "database_configured": db_enabled(),
                 "model": OPENROUTER_MODEL,
+                "fallback_models": OPENROUTER_FALLBACK_MODELS,
             },
         )
 
