@@ -6,6 +6,11 @@ import ipaddress
 import io
 from urllib.parse import urlparse
 from http.server import BaseHTTPRequestHandler
+from datetime import datetime, timezone
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    ZoneInfo = None
 
 import requests
 from bs4 import BeautifulSoup
@@ -44,6 +49,7 @@ except (TypeError, ValueError):
 MAX_TOOL_ROUNDS = 2
 HTTP_TIMEOUT = 18
 OPENROUTER_TIMEOUT = 10
+BOT_TIMEZONE = os.getenv("BOT_TIMEZONE", "Asia/Tehran").strip() or "Asia/Tehran"
 MAX_IMAGE_BYTES = 5_000_000
 MAX_DOCUMENT_BYTES = 12_000_000
 
@@ -248,6 +254,83 @@ def db_clear_history(chat_id):
         )
     except Exception as exc:
         print(f"Supabase db_clear_history failed: {type(exc).__name__}: {exc}")
+
+
+# =========================================================
+# DATE / TIME (JALALI + LOCAL CLOCK)
+# =========================================================
+
+PERSIAN_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+PERSIAN_WEEKDAYS = ["دوشنبه", "سه‌شنبه", "چهارشنبه", "پنجشنبه", "جمعه", "شنبه", "یکشنبه"]
+PERSIAN_MONTHS = [
+    "فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور",
+    "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند",
+]
+
+
+def local_now():
+    try:
+        if ZoneInfo:
+            return datetime.now(ZoneInfo(BOT_TIMEZONE))
+    except Exception as exc:
+        print(f"Invalid BOT_TIMEZONE {BOT_TIMEZONE}: {exc}")
+    return datetime.now(timezone.utc)
+
+
+def gregorian_to_jalali(gy, gm, gd):
+    g_days_in_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    j_days_in_month = [31, 31, 31, 31, 31, 31, 30, 30, 30, 30, 30, 29]
+    gy2 = gy + 1 if gm > 2 else gy
+    days = 355666 + 365 * gy + (gy2 + 3) // 4 - (gy2 + 99) // 100 + (gy2 + 399) // 400 + gd
+    for i in range(gm - 1):
+        days += g_days_in_month[i]
+    if gm > 2 and ((gy % 4 == 0 and gy % 100 != 0) or gy % 400 == 0):
+        days += 1
+    jy = -1595 + 33 * (days // 12053)
+    days %= 12053
+    jy += 4 * (days // 1461)
+    days %= 1461
+    if days > 365:
+        jy += (days - 1) // 365
+        days = (days - 1) % 365
+    if days < 186:
+        jm = 1 + days // 31
+        jd = 1 + days % 31
+    else:
+        jm = 7 + (days - 186) // 30
+        jd = 1 + (days - 186) % 30
+    return jy, jm, jd
+
+
+def current_datetime_text():
+    now = local_now()
+    jy, jm, jd = gregorian_to_jalali(now.year, now.month, now.day)
+    weekday = PERSIAN_WEEKDAYS[now.weekday()]
+    month = PERSIAN_MONTHS[jm - 1]
+    clock = now.strftime("%H:%M:%S")
+    gregorian = now.strftime("%Y-%m-%d")
+    return (
+        f"امروز {weekday}، {jd} {month} {jy}؛ ساعت {clock}\n"
+        f"تاریخ میلادی: {gregorian}\n"
+        f"منطقه زمانی: {BOT_TIMEZONE}"
+    ).translate(PERSIAN_DIGITS)
+
+
+def register_bot_commands():
+    commands = [
+        {"command": "start", "description": "شروع و نمایش راهنما"},
+        {"command": "time", "description": "نمایش ساعت و تاریخ امروز"},
+        {"command": "date", "description": "نمایش تاریخ امروز"},
+        {"command": "status", "description": "وضعیت رافائل"},
+        {"command": "evolve", "description": "تکامل به سیئل"},
+        {"command": "raphael", "description": "بازگشت به رافائل"},
+        {"command": "reset", "description": "پاک کردن حافظه گفتگو"},
+        {"command": "shutdown", "description": "غیرفعال‌سازی"},
+    ]
+    try:
+        telegram_call("setMyCommands", {"commands": commands}, timeout=12)
+    except Exception as exc:
+        print(f"Could not register Telegram commands: {type(exc).__name__}: {exc}")
 
 
 # =========================================================
@@ -595,6 +678,12 @@ def quick_greeting_reply(text):
 
 def ask_ai(chat_id, user_content, evolved, social_context=None):
     system_prompt = (CIEL_PROMPT if evolved else RAPHAEL_PROMPT) + "\n\n" + SOCIAL_PROMPT
+    system_prompt += (
+        "\n\nزمان فعلی سیستم (مبنای پاسخ به سؤال‌های زمانی):\n"
+        + current_datetime_text()
+        + "\nاگر کاربر درباره ساعت، امروز، فردا یا تاریخ پرسید، از همین زمان استفاده کن؛ "
+        "زمان را حدس نزن و اگر منطقه زمانی مهم است آن را ذکر کن."
+    )
     if social_context:
         system_prompt += (
             "\n\nزمینه همین گفتگو:\n" + str(social_context)[:1800]
@@ -807,12 +896,18 @@ def handle_message(message):
 
     if command_text == "/start":
         db_set_state(chat_id, active=True)
+        register_bot_commands()
         send_text(
             chat_id,
-            "در خدمتت هستم. برای تکامل /evolve، وضعیت /status "
-            "و پاک‌کردن حافظه گفتگو /reset را بزن.",
+            "در خدمتت هستم. 😄\n"
+            "برای دیدن ساعت و تقویم /time یا /date را بزن.\n"
+            "فرمان‌های دیگر هم از منوی کنار کادر پیام در دسترس‌اند.",
             message_id,
         )
+        return
+
+    if command_text in ("/time", "/date"):
+        send_text(chat_id, current_datetime_text(), message_id)
         return
 
     if command_text == "/status":
@@ -828,7 +923,8 @@ def handle_message(message):
             f"حافظه پایدار: {memory}\n"
             f"تعامل گروه: با اسم رافائل/سیئل، منشن یا ریپلای\n"
             f"مدل اصلی: {OPENROUTER_MODEL}\n"
-            f"مدل‌های جایگزین: {len(OPENROUTER_FALLBACK_MODELS)}",
+            f"مدل‌های جایگزین: {len(OPENROUTER_FALLBACK_MODELS)}\n"
+            f"منطقه زمانی: {BOT_TIMEZONE}",
             message_id,
         )
         return
@@ -970,6 +1066,8 @@ class handler(BaseHTTPRequestHandler):
                 "model": OPENROUTER_MODEL,
                 "fallback_models": OPENROUTER_FALLBACK_MODELS,
                 "social_mode": "name_mention_username_mention_and_reply",
+                "timezone": BOT_TIMEZONE,
+                "calendar": "Jalali + Gregorian",
             },
         )
 
