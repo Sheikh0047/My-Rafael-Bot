@@ -1,7 +1,7 @@
 import os, json, re, base64, ipaddress, io, random
 from urllib.parse import urlparse
 from http.server import BaseHTTPRequestHandler
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 try:
     from zoneinfo import ZoneInfo
 except ImportError:
@@ -50,6 +50,7 @@ MAX_IMAGE_BYTES = 5_000_000
 MAX_DOCUMENT_BYTES = 12_000_000
 
 PERSIAN_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+ASCII_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
 PERSIAN_WEEKDAYS = ["دوشنبه", "سه‌شنبه", "چهارشنبه", "پنجشنبه", "جمعه", "شنبه", "یکشنبه"]
 PERSIAN_MONTHS = [
     "فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور",
@@ -227,7 +228,7 @@ def db_clear_history(chat_id):
         print(f"db_clear_history error: {exc}")
 
 # =========================================================
-# DATE / TIME & TELEGRAM
+# DATE / TIME, BIRTHDAYS & TELEGRAM
 # =========================================================
 
 def local_now():
@@ -276,11 +277,13 @@ def telegram_call(method, payload=None, timeout=25):
         raise RuntimeError(f"Telegram API error: {data}")
     return data.get("result")
 
-def send_text(chat_id, text, reply_to=None):
+def send_text(chat_id, text, reply_to=None, parse_mode=None):
     text = (text or "پاسخی برای ارائه ندارم.").strip()
     chunks = [text[i:i + 3900] for i in range(0, len(text), 3900)] or [text]
     for idx, chunk in enumerate(chunks):
         payload = {"chat_id": chat_id, "text": chunk, "disable_web_page_preview": True}
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
         if idx == 0 and reply_to:
             payload["reply_to_message_id"] = reply_to
         telegram_call("sendMessage", payload)
@@ -291,6 +294,10 @@ def register_bot_commands():
         {"command": "time", "description": "ساعت و تاریخ"},
         {"command": "date", "description": "تاریخ امروز"},
         {"command": "status", "description": "وضعیت سیستم"},
+        {"command": "setbirthday", "description": "ثبت تولد ممبر"},
+        {"command": "birthdays", "description": "لیست تولدهای گروه"},
+        {"command": "monthbirthdays", "description": "تولدهای این ماه"},
+        {"command": "delbirthday", "description": "حذف تولد ممبر"},
         {"command": "evolve", "description": "تکامل به سیئل"},
         {"command": "raphael", "description": "بازگشت به رافائل"},
         {"command": "reset", "description": "پاک کردن حافظه"},
@@ -313,6 +320,181 @@ def download_telegram_file(file_id, max_bytes=None):
     if max_bytes and len(res.content) > max_bytes:
         raise RuntimeError("حجم فایل از حد مجاز بیشتر است.")
     return res.content
+
+def format_user_mention_html(user_id, first_name="", username=""):
+    uname = (username or "").lstrip("@").strip()
+    if uname:
+        return f"@{uname}"
+    label = (first_name or f"کاربر {user_id}").strip()
+    safe_label = label.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return f'<a href="tg://user?id={user_id}">{safe_label}</a>'
+
+def parse_birthday_input(raw_args):
+    norm = (raw_args or "").translate(ASCII_DIGITS).strip()
+    if not norm:
+        return None
+    force_gregorian = bool(re.search(r"(?:^|\s)(?:g|gregorian|میلادی)(?:\s|$)", norm, flags=re.I))
+    force_jalali = bool(re.search(r"(?:^|\s)(?:j|jalali|shamsi|شمسی)(?:\s|$)", norm, flags=re.I))
+
+    m_full = re.search(r"\b(\d{4})[/-](\d{1,2})[/-](\d{1,2})\b", norm)
+    if m_full:
+        p1, p2, p3 = int(m_full.group(1)), int(m_full.group(2)), int(m_full.group(3))
+        if force_gregorian or p1 >= 1700:
+            cal = "gregorian"
+            month, day = p2, p3
+        else:
+            cal = "jalali"
+            month, day = p2, p3
+        if 1 <= month <= 12 and 1 <= day <= 31:
+            return {"month": month, "day": day, "calendar_type": cal}
+        return None
+
+    m_md = re.search(r"\b(\d{1,2})[/-](\d{1,2})\b", norm)
+    if m_md:
+        month, day = int(m_md.group(1)), int(m_md.group(2))
+        if not (1 <= month <= 12 and 1 <= day <= 31):
+            return None
+        cal = "gregorian" if force_gregorian else ("jalali" if force_jalali else "jalali")
+        return {"month": month, "day": day, "calendar_type": cal}
+
+    return None
+
+def db_upsert_birthday(chat_id, user_id, first_name, username, month, day, calendar_type="jalali"):
+    supabase_request(
+        "POST",
+        "group_birthdays",
+        params={"on_conflict": "chat_id,user_id"},
+        payload={
+            "chat_id": str(chat_id),
+            "user_id": str(user_id),
+            "first_name": (first_name or "")[:120],
+            "username": (username or "").lstrip("@")[:80],
+            "birth_month": int(month),
+            "birth_day": int(day),
+            "calendar_type": "gregorian" if calendar_type == "gregorian" else "jalali",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
+def db_list_birthdays(chat_id):
+    rows = supabase_request(
+        "GET",
+        "group_birthdays",
+        params={
+            "chat_id": f"eq.{chat_id}",
+            "select": "user_id,first_name,username,birth_month,birth_day,calendar_type",
+            "order": "birth_month.asc,birth_day.asc",
+        },
+    )
+    return rows or []
+
+def get_current_month_birthdays(chat_id):
+    rows = db_list_birthdays(chat_id)
+    if not rows:
+        return [], 0, 0
+
+    now = local_now()
+    _, cur_j_month, _ = gregorian_to_jalali(now.year, now.month, now.day)
+    cur_g_month = now.month
+
+    matched = []
+    for r in rows:
+        cal = r.get("calendar_type") or "jalali"
+        b_month = int(r.get("birth_month") or 0)
+        b_day = int(r.get("birth_day") or 0)
+        if cal == "gregorian" and b_month == cur_g_month:
+            matched.append((b_day, r))
+        elif cal != "gregorian" and b_month == cur_j_month:
+            matched.append((b_day, r))
+
+    matched.sort(key=lambda item: item[0])
+    return [item[1] for item in matched], cur_j_month, cur_g_month
+
+def db_delete_birthday(chat_id, user_id):
+    supabase_request(
+        "DELETE",
+        "group_birthdays",
+        params={"chat_id": f"eq.{chat_id}", "user_id": f"eq.{user_id}"},
+    )
+
+def db_mark_birthday_notified(chat_id, user_id, field, year_val):
+    supabase_request(
+        "PATCH",
+        "group_birthdays",
+        params={"chat_id": f"eq.{chat_id}", "user_id": f"eq.{user_id}"},
+        payload={field: int(year_val)},
+    )
+
+def check_and_notify_birthdays(chat_id):
+    if not db_enabled() or not TELEGRAM_TOKEN:
+        return
+    try:
+        rows = db_list_birthdays(chat_id)
+        if not rows:
+            return
+        now = local_now()
+        tomorrow = now + timedelta(days=1)
+
+        today_j_y, today_j_m, today_j_d = gregorian_to_jalali(now.year, now.month, now.day)
+        tom_j_y, tom_j_m, tom_j_d = gregorian_to_jalali(tomorrow.year, tomorrow.month, tomorrow.day)
+
+        today_g_y, today_g_m, today_g_d = now.year, now.month, now.day
+        tom_g_y, tom_g_m, tom_g_d = tomorrow.year, tomorrow.month, tomorrow.day
+
+        for row in rows:
+            uid = str(row.get("user_id") or "")
+            if not uid:
+                continue
+            fname = row.get("first_name") or ""
+            uname = row.get("username") or ""
+            b_month = int(row.get("birth_month") or 0)
+            b_day = int(row.get("birth_day") or 0)
+            cal = row.get("calendar_type") or "jalali"
+            mention = format_user_mention_html(uid, fname, uname)
+
+            if cal == "gregorian":
+                cur_y, cur_m, cur_d = today_g_y, today_g_m, today_g_d
+                nxt_y, nxt_m, nxt_d = tom_g_y, tom_g_m, tom_g_d
+                cal_label = "میلادی"
+            else:
+                cur_y, cur_m, cur_d = today_j_y, today_j_m, today_j_d
+                nxt_y, nxt_m, nxt_d = tom_j_y, tom_j_m, tom_j_d
+                cal_label = "شمسی"
+
+            last_pre = row.get("last_pre_notify_year")
+            last_bday = row.get("last_bday_notify_year")
+
+            if b_month == nxt_m and b_day == nxt_d and last_pre != nxt_y:
+                msg = (
+                    f"⏳ یادآوری تولد:\n"
+                    f"فردا تولد {mention} ({cal_label}: {str(b_month).translate(PERSIAN_DIGITS)}/{str(b_day).translate(PERSIAN_DIGITS)}) است! آماده تبریک باشید."
+                )
+                send_text(chat_id, msg, parse_mode="HTML")
+                db_mark_birthday_notified(chat_id, uid, "last_pre_notify_year", nxt_y)
+
+            if b_month == cur_m and b_day == cur_d and last_bday != cur_y:
+                msg = (
+                    f"🎉🎂 تولدت مبارک {mention} جان!\n"
+                    f"امیدوارم سال جدید پر از سلامتی، حال خوب و موفقیت باشه."
+                )
+                send_text(chat_id, msg, parse_mode="HTML")
+                db_mark_birthday_notified(chat_id, uid, "last_bday_notify_year", cur_y)
+    except Exception as exc:
+        print(f"check_and_notify_birthdays error ({chat_id}): {exc}")
+
+def check_all_groups_birthdays():
+    if not db_enabled() or not TELEGRAM_TOKEN:
+        return
+    try:
+        rows = supabase_request("GET", "group_birthdays", params={"select": "chat_id"}) or []
+        seen = set()
+        for r in rows:
+            cid = str(r.get("chat_id") or "")
+            if cid and cid not in seen:
+                seen.add(cid)
+                check_and_notify_birthdays(cid)
+    except Exception as exc:
+        print(f"check_all_groups_birthdays error: {exc}")
 
 # =========================================================
 # WEB TOOLS
@@ -625,6 +807,9 @@ def handle_message(message):
     is_group = chat.get("type", "private") in ("group", "supergroup")
     text = msg_text(message)
 
+    if is_group:
+        check_and_notify_birthdays(chat_id)
+
     sender = message.get("from") or {}
     sender_name = f"{sender.get('first_name', 'کاربر')} {sender.get('last_name', '')}".strip()
     username = sender.get("username", "")
@@ -632,11 +817,142 @@ def handle_message(message):
     call_name = sender_name or username or "کاربر"
 
     reply_msg = message.get("reply_to_message") or {}
-    reply_name = (reply_msg.get("from") or {}).get("first_name", "کاربر")
+    reply_from = reply_msg.get("from") or {}
+    reply_name = reply_from.get("first_name", "کاربر")
     reply_text = msg_text(reply_msg)
 
+    raw_cmd = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
+    cmd_args = text.split(None, 1)[1].strip() if text.startswith("/") and len(text.split(None, 1)) > 1 else ""
+
+    if raw_cmd in ("/setbirthday", "/birthday"):
+        if not db_enabled():
+            send_text(chat_id, "برای ثبت تولد باید Supabase تنظیم شده باشد.", message_id)
+            return
+        norm_args = cmd_args.translate(ASCII_DIGITS).strip()
+        target_user = None
+        date_part = norm_args
+
+        m_uid = re.match(r"^(\d{5,15})\s+(.*)$", norm_args)
+        if m_uid:
+            uid_str = m_uid.group(1)
+            date_part = m_uid.group(2)
+            target_user = {"id": uid_str, "first_name": f"کاربر {uid_str}", "username": ""}
+        elif reply_from.get("id"):
+            target_user = reply_from
+        elif sender.get("id"):
+            target_user = sender
+
+        parsed = parse_birthday_input(date_part)
+        if not target_user or not target_user.get("id") or not parsed:
+            send_text(
+                chat_id,
+                "فرمت درست نیست. مثال‌ها:\n"
+                "• روی پیام فرد ریپلای کن: /setbirthday 1378/09/08 یا /setbirthday 09/08\n"
+                "• میلادی: /setbirthday 1999-11-28 g یا /setbirthday 11/28 g\n"
+                "• با آیدی عددی: /setbirthday 123456789 09/08",
+                message_id,
+            )
+            return
+
+        t_name = f"{target_user.get('first_name', '')} {target_user.get('last_name', '')}".strip() or f"کاربر {target_user['id']}"
+        t_uname = target_user.get("username", "")
+        try:
+            db_upsert_birthday(
+                chat_id,
+                target_user["id"],
+                t_name,
+                t_uname,
+                parsed["month"],
+                parsed["day"],
+                parsed["calendar_type"],
+            )
+            cal_fa = "میلادی" if parsed["calendar_type"] == "gregorian" else "شمسی"
+            m_fa = str(parsed["month"]).translate(PERSIAN_DIGITS)
+            d_fa = str(parsed["day"]).translate(PERSIAN_DIGITS)
+            mention_html = format_user_mention_html(target_user["id"], t_name, t_uname)
+            send_text(
+                chat_id,
+                f"✅ تاریخ تولد {mention_html} روی <b>{m_fa}/{d_fa}</b> ({cal_fa}) ثبت شد.",
+                message_id,
+                parse_mode="HTML",
+            )
+        except Exception as exc:
+            send_text(chat_id, f"⚠️ خطا در ثبت تولد:\n{str(exc)[:600]}", message_id)
+        return
+
+    if raw_cmd == "/birthdays":
+        if not db_enabled():
+            send_text(chat_id, "Supabase تنظیم نشده است.", message_id)
+            return
+        try:
+            rows = db_list_birthdays(chat_id)
+            if not rows:
+                send_text(chat_id, "هنوز تاریخ تولدی در این گفتگو ثبت نشده است.", message_id)
+                return
+            lines = ["🎂 لیست تاریخ تولدهای ثبت‌شده:"]
+            for idx, r in enumerate(rows, 1):
+                m_fa = str(r.get("birth_month", "")).translate(PERSIAN_DIGITS)
+                d_fa = str(r.get("birth_day", "")).translate(PERSIAN_DIGITS)
+                cal_fa = "میلادی" if r.get("calendar_type") == "gregorian" else "شمسی"
+                m_html = format_user_mention_html(r.get("user_id"), r.get("first_name", ""), r.get("username", ""))
+                lines.append(f"{str(idx).translate(PERSIAN_DIGITS)}. {m_html} — {m_fa}/{d_fa} ({cal_fa})")
+            send_text(chat_id, "\n".join(lines), message_id, parse_mode="HTML")
+        except Exception as exc:
+            send_text(chat_id, f"⚠️ خطا در خواندن لیست تولدها:\n{str(exc)[:600]}", message_id)
+        return
+
+    if raw_cmd == "/monthbirthdays" or "تولدهای این ماه" in text or "تولدهای ماه" in text:
+        if not db_enabled():
+            send_text(chat_id, "Supabase تنظیم نشده است.", message_id)
+            return
+        try:
+            matched, j_m, g_m = get_current_month_birthdays(chat_id)
+            j_month_name = PERSIAN_MONTHS[j_m - 1] if 1 <= j_m <= 12 else str(j_m)
+            g_m_fa = str(g_m).translate(PERSIAN_DIGITS)
+            if not matched:
+                send_text(
+                    chat_id,
+                    f"در این ماه ({j_month_name} / ماه {g_m_fa} میلادی) تولدی ثبت نشده است.",
+                    message_id,
+                )
+                return
+            lines = [f"🗓 تولدهای این ماه ({j_month_name} / ماه {g_m_fa} میلادی):"]
+            for idx, r in enumerate(matched, 1):
+                m_fa = str(r.get("birth_month", "")).translate(PERSIAN_DIGITS)
+                d_fa = str(r.get("birth_day", "")).translate(PERSIAN_DIGITS)
+                cal_fa = "میلادی" if r.get("calendar_type") == "gregorian" else "شمسی"
+                m_html = format_user_mention_html(r.get("user_id"), r.get("first_name", ""), r.get("username", ""))
+                lines.append(f"{str(idx).translate(PERSIAN_DIGITS)}. {m_html} — {m_fa}/{d_fa} ({cal_fa})")
+            send_text(chat_id, "\n".join(lines), message_id, parse_mode="HTML")
+        except Exception as exc:
+            send_text(chat_id, f"⚠️ خطا در دریافت تولدهای این ماه:\n{str(exc)[:600]}", message_id)
+        return
+
+    if raw_cmd == "/delbirthday":
+        if not db_enabled():
+            send_text(chat_id, "Supabase تنظیم نشده است.", message_id)
+            return
+        arg_clean = cmd_args.translate(ASCII_DIGITS).strip()
+        target_id = None
+        if re.match(r"^\d{5,15}$", arg_clean):
+            target_id = arg_clean
+        elif reply_from.get("id"):
+            target_id = str(reply_from["id"])
+        elif sender.get("id"):
+            target_id = str(sender["id"])
+
+        if not target_id:
+            send_text(chat_id, "روی پیام فرد ریپلای کن یا آیدی عددی بده: /delbirthday 123456789", message_id)
+            return
+        try:
+            db_delete_birthday(chat_id, target_id)
+            send_text(chat_id, "🗑 تاریخ تولد موردنظر حذف شد.", message_id)
+        except Exception as exc:
+            send_text(chat_id, f"⚠️ خطا در حذف تولد:\n{str(exc)[:600]}", message_id)
+        return
+
     if is_group:
-        replied_to_bot = bool((reply_msg.get("from") or {}).get("is_bot"))
+        replied_to_bot = bool(reply_from.get("is_bot"))
         u_mention = bool(BOT_USERNAME and re.search(rf"@{re.escape(BOT_USERNAME)}\b", text, flags=re.I))
         n_mention = bool(re.search(r"(?<![\w])(?:رافائل|رافایل|سیئل|raphael|ciel)(?![\w])", text, flags=re.I))
         if not (replied_to_bot or u_mention or n_mention or text.startswith("/")):
@@ -738,7 +1054,8 @@ class handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_GET(self):
-        self._reply(200, {"service": "Raphael / Ciel Social v5.1 Groq", "status": "running", "database_configured": db_enabled(), "model": GROQ_MODEL})
+        check_all_groups_birthdays()
+        self._reply(200, {"service": "Raphael / Ciel Social v5.1 Groq + Birthdays", "status": "running", "database_configured": db_enabled(), "model": GROQ_MODEL})
 
     def do_POST(self):
         if WEBHOOK_SECRET and self.headers.get("X-Telegram-Bot-Api-Secret-Token", "") != WEBHOOK_SECRET:
