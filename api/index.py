@@ -173,35 +173,8 @@ HOSTILITY_RE = re.compile(
     flags=re.I,
 )
 
-BOT_CALL_ONLY_RE = re.compile(
-    r"^\s*(?:@[\w_]+\s*)*(?:رافائل|رافایل|سیئل|raphael|ciel)?(?:\s*@[\w_]+)*\s*[؟!،,.؛:…\-]*\s*$",
-    flags=re.I,
-)
-
 class QuotaExceededError(RuntimeError):
     pass
-
-def is_bare_bot_call(raw_text, cleaned_text):
-    clean_no_punct = re.sub(r"[\s؟!،,.؛:…\-]+", "", cleaned_text or "")
-    if not clean_no_punct:
-        return True
-    return bool(BOT_CALL_ONLY_RE.match(raw_text or ""))
-
-def bare_call_reply(call_name, evolved=False):
-    name = (call_name or "رفیق").strip()
-    if evolved:
-        options = [
-            f"جانم {name} جان؟ صدا زدی، بگو چی شده؟",
-            f"بله {name}؟ حواسم هست، بگو کارت چیه.",
-            f"اینجام {name}؛ چیزی لازم داری؟",
-        ]
-    else:
-        options = [
-            f"جانم {name} جان 😄 چی شده؟",
-            f"بله {name}؟ بگو رفیق، در خدمتم.",
-            f"صدام زدی {name}؟ بگو چطور کمکت کنم.",
-        ]
-    return random.choice(options)
 
 def detect_hostility(text):
     return bool(text and HOSTILITY_RE.search(text.strip().lower()))
@@ -642,6 +615,8 @@ def quick_greeting_reply(text, call_name="رفیق"):
         "شب بخیر": f"شب {call_name} خوش، خوش بگذره 🌙",
         "خسته نباشی": f"قربونت {call_name}، تو هم خسته نباشی 😄",
     }
+    if cleaned in ("", "رافائل", "رافایل", "سیئل", "raphael", "ciel"):
+        return f"جانم {call_name}؟ 😄"
     return replies.get(cleaned)
 
 def ask_ai(chat_id, user_content, evolved, social_context=None, hostile=False, call_name="رفیق"):
@@ -738,8 +713,7 @@ def handle_message(message):
 
     message_id = message.get("message_id")
     is_group = chat.get("type", "private") in ("group", "supergroup")
-    raw_text = msg_text(message)
-    text = raw_text
+    text = msg_text(message)
 
     sender = message.get("from") or {}
     first_name = sender.get("first_name", "")
@@ -807,18 +781,6 @@ def handle_message(message):
     if not state.get("active", True):
         return
     if not text and not message.get("photo") and not message.get("document"):
-        if not is_group and is_bare_bot_call(raw_text, text):
-            reply = bare_call_reply(call_name, evolved=state.get("evolved", False))
-            send_text(chat_id, reply, message_id)
-            db_save_message(chat_id, "user", raw_text or "[صدا زدن]")
-            db_save_message(chat_id, "assistant", reply)
-        return
-
-    if not message.get("photo") and not message.get("document") and is_bare_bot_call(raw_text, text):
-        reply = bare_call_reply(call_name, evolved=state.get("evolved", False))
-        send_text(chat_id, reply, message_id)
-        db_save_message(chat_id, "user", raw_text or "[صدا زدن]")
-        db_save_message(chat_id, "assistant", reply)
         return
 
     hostile = detect_hostility(text)
@@ -870,7 +832,7 @@ class handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_GET(self):
-        self._reply(200, {"service": "Raphael / Ciel Social v5.3 Groq FA", "status": "running", "database_configured": db_enabled(), "model": GROQ_MODEL})
+        self._reply(200, {"service": "Raphael / Ciel Social v5.2 Groq FA", "status": "running", "database_configured": db_enabled(), "model": GROQ_MODEL})
 
     def do_POST(self):
         if WEBHOOK_SECRET and self.headers.get("X-Telegram-Bot-Api-Secret-Token", "") != WEBHOOK_SECRET:
