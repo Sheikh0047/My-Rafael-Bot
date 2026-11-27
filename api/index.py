@@ -11,19 +11,18 @@ import requests
 from bs4 import BeautifulSoup
 
 # =========================================================
-# CONFIG
+# CONFIG (GROQ)
 # =========================================================
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openrouter/free").strip()
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
+GROQ_VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct").strip()
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-OPENROUTER_FALLBACK_MODELS = [
-    "inclusionai/ling-3.2-flash:free",
-    "nvidia/nemotron-3.5-super-vl:free",
-    "particle-ai/particle-1:free",
-    "openrouter/free",
+GROQ_FALLBACK_MODELS = [
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+    "llama-3.1-8b-instant",
 ]
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
@@ -44,7 +43,7 @@ except (TypeError, ValueError):
 
 MAX_TOOL_ROUNDS = 2
 HTTP_TIMEOUT = 18
-OPENROUTER_TIMEOUT = 14
+GROQ_TIMEOUT = 14
 MAX_IMAGE_BYTES = 5_000_000
 MAX_DOCUMENT_BYTES = 12_000_000
 
@@ -85,6 +84,9 @@ HOSTILITY_RE = re.compile(
     r"بلد\s*نیستی|هیچی\s*حالت\s*نیست|پاتک|دعوا",
     flags=re.I,
 )
+
+class QuotaExceededError(RuntimeError):
+    pass
 
 def detect_hostility(text):
     return bool(text and HOSTILITY_RE.search(text.strip().lower()))
@@ -401,40 +403,58 @@ def run_tool(name, args):
     return "ابزار ناشناخته است."
 
 # =========================================================
-# AI & CONTENT
+# AI & CONTENT (GROQ)
 # =========================================================
 
-def openrouter_headers():
-    if not OPENROUTER_API_KEY:
-        raise RuntimeError("OPENROUTER_API_KEY is not configured")
+def groq_headers():
+    if not GROQ_API_KEY:
+        raise RuntimeError("GROQ_API_KEY در تنظیمات Vercel وارد نشده است.")
     return {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json",
-        "HTTP-Referer": os.getenv("PUBLIC_APP_URL", "https://vercel.com"),
-        "X-Title": "Raphael Ciel Telegram Assistant",
     }
 
-def call_openrouter(messages, enable_tools=False, hostile=False):
-    headers = openrouter_headers()
-    models = list(dict.fromkeys([OPENROUTER_MODEL] + OPENROUTER_FALLBACK_MODELS[:1]))
+def has_image_input(messages):
+    for m in messages:
+        content = m.get("content")
+        if isinstance(content, list) and any(isinstance(p, dict) and p.get("type") == "image_url" for p in content):
+            return True
+    return False
+
+def call_groq(messages, enable_tools=False, hostile=False):
+    headers = groq_headers()
+    if has_image_input(messages):
+        models = [GROQ_VISION_MODEL]
+        enable_tools = False
+    else:
+        models = list(dict.fromkeys([GROQ_MODEL] + GROQ_FALLBACK_MODELS))
+
     retryable = {408, 409, 425, 429, 500, 502, 503, 504, 529}
     errors = []
+    saw_429 = False
 
     for model in models:
-        payload = {"model": model, "messages": messages, "max_tokens": 550, "temperature": 0.9 if hostile else 0.85}
+        payload = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": 550,
+            "temperature": 0.9 if hostile else 0.85,
+        }
         if enable_tools:
             payload.update({"tools": TOOLS, "tool_choice": "auto", "parallel_tool_calls": False})
         try:
-            res = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=OPENROUTER_TIMEOUT)
+            res = requests.post(GROQ_URL, headers=headers, json=payload, timeout=GROQ_TIMEOUT)
             if res.status_code >= 400:
                 detail = (res.text or res.reason or "")[:450]
+                if res.status_code == 429:
+                    saw_429 = True
                 errors.append(f"{model}: HTTP {res.status_code} - {detail}")
                 if res.status_code in retryable:
                     continue
-                raise RuntimeError(f"OpenRouter HTTP {res.status_code}: {detail}")
+                raise RuntimeError(f"Groq HTTP {res.status_code}: {detail}")
             choices = res.json().get("choices") or []
             if choices and isinstance(choices[0].get("message"), dict):
-                print(f"OpenRouter selected model: {model}")
+                print(f"Groq selected model: {model}")
                 return choices[0]["message"]
             errors.append(f"{model}: no choices returned")
         except requests.exceptions.Timeout:
@@ -444,7 +464,9 @@ def call_openrouter(messages, enable_tools=False, hostile=False):
         except ValueError as exc:
             errors.append(f"{model}: invalid JSON: {exc}")
 
-    raise RuntimeError("مدل‌های هوش مصنوعی پاسخ‌گو نیستند:\n" + "\n".join(errors)[:1800])
+    if saw_429 and len(errors) == len(models):
+        raise QuotaExceededError("سقف درخواست فعلی Groq پر شده است.")
+    raise RuntimeError("مدل‌های Groq پاسخ‌گو نیستند:\n" + "\n".join(errors)[:1800])
 
 def needs_web_tools(user_content):
     text = " ".join(
@@ -490,24 +512,29 @@ def ask_ai(chat_id, user_content, evolved, social_context=None, hostile=False, c
     messages = [{"role": "system", "content": prompt}] + db_get_history(chat_id)[-8:] + [{"role": "user", "content": user_content}]
     enable_tools = False if hostile else needs_web_tools(user_content)
 
-    for _ in range(MAX_TOOL_ROUNDS + 1):
-        ans = call_openrouter(messages, enable_tools=enable_tools, hostile=hostile)
-        tool_calls = ans.get("tool_calls") or []
-        if not tool_calls:
-            extracted = extract_message_text(ans)
-            if extracted:
-                return extracted
-            if hostile:
-                return fallback_banter_reply(call_name, evolved=evolved)
-            return f"{call_name}، الان چیزی به ذهنم نرسید؛ یه بار دیگه بگو."
-        messages.append(ans)
-        for tc in tool_calls:
-            fn = tc.get("function", {})
-            try:
-                out = run_tool(fn.get("name", ""), json.loads(fn.get("arguments") or "{}"))
-            except Exception as exc:
-                out = f"خطای ابزار: {str(exc)[:400]}"
-            messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": str(out)[:9000]})
+    try:
+        for _ in range(MAX_TOOL_ROUNDS + 1):
+            ans = call_groq(messages, enable_tools=enable_tools, hostile=hostile)
+            tool_calls = ans.get("tool_calls") or []
+            if not tool_calls:
+                extracted = extract_message_text(ans)
+                if extracted:
+                    return extracted
+                if hostile:
+                    return fallback_banter_reply(call_name, evolved=evolved)
+                return f"{call_name}، الان چیزی به ذهنم نرسید؛ یه بار دیگه بگو."
+            messages.append(ans)
+            for tc in tool_calls:
+                fn = tc.get("function", {})
+                try:
+                    out = run_tool(fn.get("name", ""), json.loads(fn.get("arguments") or "{}"))
+                except Exception as exc:
+                    out = f"خطای ابزار: {str(exc)[:400]}"
+                messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": str(out)[:9000]})
+    except QuotaExceededError:
+        if hostile:
+            return fallback_banter_reply(call_name, evolved=evolved)
+        return f"{call_name}، الان درخواست‌ها زیاده و سهمیه موقت پر شده؛ چند لحظه بعد دوباره بفرست."
 
     return "نتیجه دریافت شد، اما برای تکمیل پاسخ به یک پیام دیگر نیاز دارم."
 
@@ -598,7 +625,7 @@ def handle_message(message):
         send_text(
             chat_id,
             f"وضعیت: {'فعال' if st['active'] else 'خاموش'}\nشخصیت: {'سیئل' if st['evolved'] else 'رافائل'}\n"
-            f"حافظه: {'فعال' if db_enabled() else 'غیرفعال'}\nمدل: {OPENROUTER_MODEL}",
+            f"حافظه: {'فعال' if db_enabled() else 'غیرفعال'}\nسرویس AI: Groq ({GROQ_MODEL})",
             message_id,
         )
         return
@@ -675,7 +702,7 @@ class handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_GET(self):
-        self._reply(200, {"service": "Raphael / Ciel Social v4 Fast", "status": "running", "database_configured": db_enabled(), "model": OPENROUTER_MODEL})
+        self._reply(200, {"service": "Raphael / Ciel Social v5 Groq", "status": "running", "database_configured": db_enabled(), "model": GROQ_MODEL})
 
     def do_POST(self):
         if WEBHOOK_SECRET and self.headers.get("X-Telegram-Bot-Api-Secret-Token", "") != WEBHOOK_SECRET:
