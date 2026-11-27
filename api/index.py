@@ -16,13 +16,15 @@ from bs4 import BeautifulSoup
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant").strip()
 GROQ_VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct").strip()
-GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models"
 
 GROQ_FALLBACK_MODELS = [
-    "meta-llama/llama-4-scout-17b-16e-instruct",
     "llama-3.1-8b-instant",
+    "qwen/qwen3-32b",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
 ]
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
@@ -406,6 +408,8 @@ def run_tool(name, args):
 # AI & CONTENT (GROQ)
 # =========================================================
 
+_CACHED_GROQ_MODELS = None
+
 def groq_headers():
     if not GROQ_API_KEY:
         raise RuntimeError("GROQ_API_KEY در تنظیمات Vercel وارد نشده است.")
@@ -413,6 +417,39 @@ def groq_headers():
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json",
     }
+
+def discover_groq_models(vision=False):
+    global _CACHED_GROQ_MODELS
+    if _CACHED_GROQ_MODELS is None:
+        try:
+            res = requests.get(GROQ_MODELS_URL, headers=groq_headers(), timeout=8)
+            if res.status_code == 200:
+                items = res.json().get("data") or []
+                _CACHED_GROQ_MODELS = [m.get("id") for m in items if isinstance(m, dict) and m.get("id")]
+            else:
+                _CACHED_GROQ_MODELS = []
+        except Exception:
+            _CACHED_GROQ_MODELS = []
+
+    available = _CACHED_GROQ_MODELS or []
+    if vision:
+        preferred = [GROQ_VISION_MODEL, "meta-llama/llama-4-scout-17b-16e-instruct", "meta-llama/llama-4-maverick-17b-128e-instruct"]
+        for p in preferred:
+            if p and (not available or p in available):
+                return [p]
+        vision_matches = [m for m in available if any(k in m.lower() for k in ("vision", "scout", "maverick", "vl"))]
+        return vision_matches[:2] or [GROQ_VISION_MODEL]
+
+    candidates = list(dict.fromkeys([GROQ_MODEL] + GROQ_FALLBACK_MODELS))
+    if available:
+        filtered = [m for m in candidates if m in available]
+        for m in available:
+            if m not in filtered and not any(k in m.lower() for k in ("whisper", "guard", "tts", "embed")):
+                filtered.append(m)
+            if len(filtered) >= 5:
+                break
+        return filtered or candidates
+    return candidates
 
 def has_image_input(messages):
     for m in messages:
@@ -423,13 +460,12 @@ def has_image_input(messages):
 
 def call_groq(messages, enable_tools=False, hostile=False):
     headers = groq_headers()
-    if has_image_input(messages):
-        models = [GROQ_VISION_MODEL]
+    is_vision = has_image_input(messages)
+    models = discover_groq_models(vision=is_vision)
+    if is_vision:
         enable_tools = False
-    else:
-        models = list(dict.fromkeys([GROQ_MODEL] + GROQ_FALLBACK_MODELS))
 
-    retryable = {408, 409, 425, 429, 500, 502, 503, 504, 529}
+    retryable = {404, 408, 409, 425, 429, 500, 502, 503, 504, 529}
     errors = []
     saw_429 = False
 
@@ -443,7 +479,7 @@ def call_groq(messages, enable_tools=False, hostile=False):
         if enable_tools:
             payload.update({"tools": TOOLS, "tool_choice": "auto", "parallel_tool_calls": False})
         try:
-            res = requests.post(GROQ_URL, headers=headers, json=payload, timeout=GROQ_TIMEOUT)
+            res = requests.post(GROQ_CHAT_URL, headers=headers, json=payload, timeout=GROQ_TIMEOUT)
             if res.status_code >= 400:
                 detail = (res.text or res.reason or "")[:450]
                 if res.status_code == 429:
@@ -702,7 +738,7 @@ class handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_GET(self):
-        self._reply(200, {"service": "Raphael / Ciel Social v5 Groq", "status": "running", "database_configured": db_enabled(), "model": GROQ_MODEL})
+        self._reply(200, {"service": "Raphael / Ciel Social v5.1 Groq", "status": "running", "database_configured": db_enabled(), "model": GROQ_MODEL})
 
     def do_POST(self):
         if WEBHOOK_SECRET and self.headers.get("X-Telegram-Bot-Api-Secret-Token", "") != WEBHOOK_SECRET:
