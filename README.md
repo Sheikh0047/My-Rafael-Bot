@@ -1,78 +1,38 @@
-# Raphael / Ciel v2 (Vercel + Telegram)
+<div align="center">
 
-نسخه ارتقایافته ربات با شخصیت رافائل/سیئل، حافظه مکالمه، جست‌وجوی وب، خواندن PDF و تحلیل تصویر.
+# 🧠 Raphael / Ciel — ربات هوشمند تلگرام (Serverless)
 
-## ساختار
-- `api/index.py`: وبهوک تلگرام و هسته هوش مصنوعی
-- `requirements.txt`: وابستگی‌ها
-- `vercel.json`: تنظیمات تابع
-- `supabase.sql`: ساخت جداول حافظه
-- `.env.example`: نام متغیرهای محیطی
+**دستیار هوشمند و اجتماعی گروه و پی‌وی با شخصیت دوگانه رافائل / سیئل، حافظه ماندگار، جست‌وجوی وب، پردازش تصویر و PDF و سیستم مدیریت خودکار تولد اعضا**
 
-## 1) نصب روی GitHub / Vercel
-1. از پروژه فعلی یک کپی یا Branch پشتیبان بگیر.
-2. فایل `api/index.py` را با نسخه این بسته جایگزین کن.
-3. `requirements.txt` و `vercel.json` را در ریشه پروژه قرار بده.
-4. پروژه را در Vercel دوباره Deploy کن.
+[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+[![Vercel](https://img.shields.io/badge/Vercel-Serverless-000000?style=for-the-badge&logo=vercel&logoColor=white)](https://vercel.com/)
+[![Groq](https://img.shields.io/badge/AI-Groq_API-F55036?style=for-the-badge)](https://groq.com/)
+[![Supabase](https://img.shields.io/badge/Database-Supabase-3ECF8E?style=for-the-badge&logo=supabase&logoColor=white)](https://supabase.com/)
+[![Telegram](https://img.shields.io/badge/Telegram-Bot_API-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://core.telegram.org/bots/api)
 
-## 2) متغیرهای محیطی Vercel
-در Project Settings > Environment Variables موارد زیر را تنظیم کن:
+</div>
 
-ضروری:
-- `TELEGRAM_TOKEN`: توکن BotFather
-- `OPENROUTER_API_KEY`: کلید OpenRouter
+---
 
-پیشنهادی:
-- `OPENROUTER_MODEL`: مقدار `openrouter/free`
-- `BOT_USERNAME`: نام ربات بدون @
-- `TELEGRAM_WEBHOOK_SECRET`: یک رشته تصادفی طولانی (فقط حروف/عدد/underscore)
-- `PUBLIC_APP_URL`: آدرس Deployment، مثل `https://your-project.vercel.app`
-- `MAX_HISTORY`: تعداد پیام‌های قبلی، پیش‌فرض 16
+## ✨ امکانات کلیدی
 
-برای حافظه دائمی:
-- `SUPABASE_URL`: آدرس پروژه Supabase
-- `SUPABASE_SERVICE_ROLE_KEY`: کلید service_role پروژه (فقط در Vercel، هرگز در کد یا GitHub قرار نده)
+- 🎭 **شخصیت دوگانه (`Raphael` / `Ciel`):** قابلیت تکامل از حالت تحلیلی و سردِ *رافائل* به حالت برترِ *سیئل* با حفظ حافظه گفتگو.
+- ⚡ **موتور هوش مصنوعی Groq با سوئیچ خودکار مدل:** انتخاب خودکار مدل فعال، فیلتر مدل‌های غیرمتنی/صوتی و مدیریت هوشمند خطاها و محدودیت نرخ (`429`).
+- 🎂 **سیستم جامع تولد اعضای گروه:**
+  - ثبت تولد اعضا با ریپلای یا آیدی عددی (پشتیبانی از تقویم **شمسی** و **میلادی**).
+  - نمایش لیست کل تولدهای گروه (`/birthdays`) و تولدهای ماه جاری (`/monthbirthdays`).
+  - **یادآوری خودکار یک روز قبل از تولد** + **تبریک روز تولد** با تگ مستقیم ممبر (`@username` یا لینک پروفایل).
+  - جلوگیری از ارسال پیام تکراری در هر سال.
+- 🌐 **جست‌وجو و خواندن صفحات وب:** اتصال به **Tavily** یا **DuckDuckGo** برای دریافت اخبار، قیمت‌ها و اطلاعات به‌روز به همراه لینک منبع.
+- 👁️ **درک تصویر و فایل PDF:** تحلیل عکس‌های ارسالی با مدل‌های Vision و استخراج و خلاصه‌سازی متن فایل‌های PDF.
+- 🛡️ **مدیریت تعامل و کل‌کل هوشمند در گروه:** پاسخ‌گویی به منشن، ریپلای یا صدا زدن اسم ربات با لحن متناسب با فضای گفتگو.
 
-برای جست‌وجوی بهتر:
-- `TAVILY_API_KEY`: کلید Tavily. در صورت نبود این کلید، کد از fallback ساده DuckDuckGo HTML استفاده می‌کند که تضمین پایداری ندارد.
+---
 
-## 3) ساخت دیتابیس حافظه در Supabase
-در Supabase > SQL Editor محتوای `supabase.sql` را اجرا کن.
-سپس `SUPABASE_URL` و `SUPABASE_SERVICE_ROLE_KEY` را در Vercel تنظیم کن.
-کلید service_role محرمانه است و نباید در کلاینت یا مخزن عمومی باشد.
+## 🛠️ معماری پروژه
 
-بدون Supabase، ربات همچنان کار می‌کند اما حافظه پایدار و وضعیت مستقل هر چت فعال نخواهد بود.
-
-## 4) تنظیم Webhook تلگرام
-بعد از Deploy، آدرس تابع معمولاً این است:
-`https://YOUR-PROJECT.vercel.app/api`
-
-در مرورگر یا با curl، وبهوک را تنظیم کن (مقادیر را جایگزین کن):
-`https://api.telegram.org/bot<TELEGRAM_TOKEN>/setWebhook?url=https://YOUR-PROJECT.vercel.app/api&secret_token=<TELEGRAM_WEBHOOK_SECRET>`
-
-اگر `TELEGRAM_WEBHOOK_SECRET` تنظیم نکردی، پارامتر `secret_token` را هم حذف کن.
-توکن واقعی را در لینک یا پیام عمومی منتشر نکن.
-
-## 5) فرمان‌ها
-- `/start` شروع و راهنما
-- `/status` وضعیت سیستم
-- `/evolve` تکامل به سیئل
-- `/raphael` بازگشت به رافائل
-- `/shutdown` توقف پاسخ‌گویی
-- `/reset` پاک‌کردن تاریخچه مکالمه همان چت
-
-در گروه، ربات به فرمان‌ها، منشن یا پاسخ به پیام خودش واکنش نشان می‌دهد. برای منشن، `BOT_USERNAME` را تنظیم کن.
-
-## قابلیت‌ها و محدودیت‌ها
-- حافظه مکالمه و وضعیت رافائل/سیئل: با Supabase پایدار می‌شود.
-- جست‌وجو: با Tavily بهتر و پایدارتر است؛ fallback رایگان DuckDuckGo ممکن است تغییر کند یا محدود شود.
-- تصویر: عکس تلگرام به مدل ارسال می‌شود؛ مدل انتخاب‌شده باید بینایی داشته باشد.
-- PDF: استخراج متن از PDFهای متنی؛ PDF اسکن‌شده نیازمند OCR جداگانه است.
-- ابزارها: جست‌وجو و خواندن صفحات HTTPS. اجرای کد دلخواه، shell، ارسال پیام به دیگران یا دسترسی نامحدود به اینترنت عمداً پیاده‌سازی نشده است.
-- `openrouter/free` رایگان است اما محدودیت سهمیه و دسترس‌پذیری مدل‌ها دارد. پشتیبانی ابزار/تصویر به مدل انتخاب‌شده بستگی دارد.
-- تابع Vercel زمان اجرای محدود دارد؛ جست‌وجوهای خیلی طولانی یا فایل‌های بزرگ ممکن است timeout شوند.
-
-## امنیت
-- هیچ API key یا توکن را در GitHub commit نکن.
-- از کلید Supabase `service_role` فقط به‌عنوان Environment Variable در سرور استفاده کن.
-- برای استفاده عمومی، بهتر است دسترسی فرمان‌های مدیریتی را با `OWNER_TELEGRAM_ID` محدود کنی و محدودیت نرخ درخواست اضافه کنی.
+```text
+Telegram Webhook ──► Vercel Python Serverless Function
+                           ├──► Groq API (Chat / Vision / Tool Calling)
+                           ├──► Tavily / DuckDuckGo (Web Search & Reader)
+                           └──► Supabase PostgreSQL (State, History, Birthdays)
