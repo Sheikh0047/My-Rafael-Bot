@@ -623,14 +623,15 @@ def discover_groq_models(vision=False):
         return vision_matches[:2] or [GROQ_VISION_MODEL]
 
     candidates = list(dict.fromkeys([GROQ_MODEL] + GROQ_FALLBACK_MODELS))
+    skip_words = ("whisper", "guard", "tts", "embed", "orpheus", "playai")
     if available:
-        filtered = [m for m in candidates if m in available]
+        filtered = [m for m in candidates if m in available and not any(k in m.lower() for k in skip_words)]
         for m in available:
-            if m not in filtered and not any(k in m.lower() for k in ("whisper", "guard", "tts", "embed")):
+            if m not in filtered and not any(k in m.lower() for k in skip_words):
                 filtered.append(m)
             if len(filtered) >= 5:
                 break
-        return filtered or candidates
+        return filtered or [m for m in candidates if not any(k in m.lower() for k in skip_words)] or candidates
     return candidates
 
 def has_image_input(messages):
@@ -667,7 +668,7 @@ def call_groq(messages, enable_tools=False, hostile=False):
                 if res.status_code == 429:
                     saw_429 = True
                 errors.append(f"{model}: HTTP {res.status_code} - {detail}")
-                if res.status_code in retryable:
+                if "model_terms_required" in detail or res.status_code in retryable:
                     continue
                 raise RuntimeError(f"Groq HTTP {res.status_code}: {detail}")
             choices = res.json().get("choices") or []
